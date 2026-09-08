@@ -270,14 +270,40 @@
       margin: 0;
       min-height: 1.2em;
     }
+
+    #hud button.stop {
+      background: var(--danger);
+      border-color: var(--danger);
+      color: #fff;
+      font-weight: 700;
+    }
+
+    .rec-dot {
+      display: none;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--danger);
+      box-shadow: 0 0 0 0 rgba(232, 93, 93, 0.6);
+      animation: pulse 1.2s infinite;
+    }
+
+    body.recording .rec-dot { display: inline-block; }
+
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(232, 93, 93, 0.55); }
+      70% { box-shadow: 0 0 0 8px rgba(232, 93, 93, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(232, 93, 93, 0); }
+    }
   </style>
 </head>
 <body>
   <div id="setup">
     <h1>Телесуфлёр</h1>
     <p class="hint">
-      На iPhone: Safari → Поделиться → «На экран Домой». Камера спереди, текст поверх.
-      Голос — в AirPods / наушники (вывод звука системы).
+      Камера спереди + текст только на экране. В файл уходит чистое видео без суфлёра.
+      Старт — запись, Стоп — сохранить (на iPhone откроется «Поделиться» → «Сохранить видео»).
+      Голос в ухо — через AirPods, чтобы TTS не попал в микрофон.
     </p>
     <p class="install-tip" id="installTip">
       Чтобы поставить как приложение: Safari → кнопка «Поделиться» → «На экран „Домой“».
@@ -285,9 +311,11 @@
     <textarea id="script" placeholder="Вставь текст для чтения…"></textarea>
     <div class="grid">
       <label class="check"><input id="camOn" type="checkbox" checked /> Камера</label>
+      <label class="check"><input id="recOn" type="checkbox" checked /> Запись видео</label>
       <label class="check"><input id="voiceOn" type="checkbox" /> Голос в ухо</label>
       <label class="check"><input id="countdownOn" type="checkbox" checked /> Отсчёт 3 сек</label>
       <label class="check"><input id="followVoice" type="checkbox" checked /> Лента за голосом</label>
+      <label class="check"><input id="micOn" type="checkbox" checked /> Микрофон в запись</label>
     </div>
     <div class="grid">
       <label>Скорость ленты <span id="speedVal">36</span>
@@ -325,9 +353,11 @@
     </div>
     <div id="countdown">3</div>
     <div id="hud">
+      <button type="button" class="stop" id="stopBtn">Стоп</button>
       <button type="button" id="playBtn">Пауза</button>
       <button type="button" id="voiceToggleBtn">Голос</button>
       <button type="button" id="backBtn">Назад</button>
+      <span class="rec-dot" aria-hidden="true"></span>
       <span id="status">идёт</span>
     </div>
   </div>
@@ -342,6 +372,8 @@
     const voiceRateEl = $("voiceRate");
     const shadeEl = $("shade");
     const camOnEl = $("camOn");
+    const recOnEl = $("recOn");
+    const micOnEl = $("micOn");
     const voiceOnEl = $("voiceOn");
     const countdownOn = $("countdownOn");
     const followVoiceEl = $("followVoice");
@@ -349,11 +381,12 @@
     const setupErr = $("setupErr");
     const statusEl = $("status");
     const playBtn = $("playBtn");
+    const stopBtn = $("stopBtn");
     const voiceToggleBtn = $("voiceToggleBtn");
     const countdownEl = $("countdown");
     const installTip = $("installTip");
 
-    const STORAGE_KEY = "teleprompter-pwa-v1";
+    const STORAGE_KEY = "teleprompter-pwa-v2";
     const synth = window.speechSynthesis || null;
 
     let stream = null;
@@ -367,6 +400,13 @@
     let chunkIndex = 0;
     let utteranceGen = 0;
     let wakeLock = null;
+    let mediaRecorder = null;
+    let recordedChunks = [];
+    let recording = false;
+    let recStartedAt = 0;
+    let recTimer = 0;
+    let recMime = "";
+    let saveBusy = false;
 
     function rateFromSlider() {
       return Number(voiceRateEl.value) / 100;
@@ -387,7 +427,8 @@
 
     function loadState() {
       try {
-        const raw = localStorage.getItem(STORAGE_KEY);
+        const raw = localStorage.getItem(STORAGE_KEY)
+          || localStorage.getItem("teleprompter-pwa-v1");
         if (!raw) return;
         const s = JSON.parse(raw);
         if (s.text) scriptEl.value = s.text;
@@ -396,6 +437,8 @@
         if (s.voiceRate) voiceRateEl.value = s.voiceRate;
         if (typeof s.shade === "number") shadeEl.value = s.shade;
         if (typeof s.camOn === "boolean") camOnEl.checked = s.camOn;
+        if (typeof s.recOn === "boolean") recOnEl.checked = s.recOn;
+        if (typeof s.micOn === "boolean") micOnEl.checked = s.micOn;
         if (typeof s.voiceOn === "boolean") voiceOnEl.checked = s.voiceOn;
         if (typeof s.countdown === "boolean") countdownOn.checked = s.countdown;
         if (typeof s.followVoice === "boolean") followVoiceEl.checked = s.followVoice;
@@ -414,6 +457,8 @@
         voiceRate: Number(voiceRateEl.value),
         shade: Number(shadeEl.value),
         camOn: camOnEl.checked,
+        recOn: recOnEl.checked,
+        micOn: micOnEl.checked,
         voiceOn: voiceOnEl.checked,
         countdown: countdownOn.checked,
         followVoice: followVoiceEl.checked,
@@ -540,8 +585,10 @@
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error("Камера недоступна в этом браузере. Открой в Safari.");
       }
+      const wantRec = recOnEl.checked;
+      const wantMic = wantRec && micOnEl.checked;
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
+        audio: wantMic,
         video: {
           facingMode: { ideal: "user" },
           width: { ideal: 1280 },
@@ -549,15 +596,187 @@
         },
       });
       camEl.srcObject = stream;
+      camEl.muted = true; // без эха; в запись звук идёт из трека, не с динамика
       await camEl.play().catch(() => {});
     }
 
     function stopCamera() {
+      hardStopRecorder(false);
       if (stream) {
         stream.getTracks().forEach((t) => t.stop());
         stream = null;
       }
       camEl.srcObject = null;
+    }
+
+    function pickRecorderMime() {
+      if (!window.MediaRecorder) return "";
+      const types = [
+        "video/mp4",
+        "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+        "video/webm;codecs=vp9,opus",
+        "video/webm;codecs=vp8,opus",
+        "video/webm",
+      ];
+      for (const t of types) {
+        if (MediaRecorder.isTypeSupported(t)) return t;
+      }
+      return "";
+    }
+
+    function formatRecTime(ms) {
+      const s = Math.floor(ms / 1000);
+      const m = Math.floor(s / 60);
+      const r = s % 60;
+      return `${m}:${String(r).padStart(2, "0")}`;
+    }
+
+    function updateRecStatus() {
+      if (!recording) return;
+      const t = formatRecTime(Date.now() - recStartedAt);
+      statusEl.textContent = `REC ${t}`;
+    }
+
+    function startRecorder() {
+      hardStopRecorder(false);
+      if (!recOnEl.checked || !stream) return;
+      if (!window.MediaRecorder) {
+        setupErr.textContent = "Запись в этом Safari не поддерживается.";
+        return;
+      }
+      recordedChunks = [];
+      recMime = pickRecorderMime();
+      try {
+        mediaRecorder = recMime
+          ? new MediaRecorder(stream, { mimeType: recMime, videoBitsPerSecond: 2500000 })
+          : new MediaRecorder(stream);
+      } catch (err) {
+        try {
+          mediaRecorder = new MediaRecorder(stream);
+        } catch (err2) {
+          setupErr.textContent = "Не удалось начать запись.";
+          mediaRecorder = null;
+          return;
+        }
+      }
+      recMime = mediaRecorder.mimeType || recMime || "video/mp4";
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+      };
+      mediaRecorder.start(1000);
+      recording = true;
+      recStartedAt = Date.now();
+      document.body.classList.add("recording");
+      updateRecStatus();
+      if (recTimer) clearInterval(recTimer);
+      recTimer = setInterval(updateRecStatus, 500);
+    }
+
+    function hardStopRecorder(keepChunks) {
+      if (recTimer) {
+        clearInterval(recTimer);
+        recTimer = 0;
+      }
+      document.body.classList.remove("recording");
+      recording = false;
+      if (!mediaRecorder) {
+        if (!keepChunks) recordedChunks = [];
+        return;
+      }
+      const rec = mediaRecorder;
+      mediaRecorder = null;
+      try {
+        if (rec.state !== "inactive") rec.stop();
+      } catch (_) {}
+      if (!keepChunks) recordedChunks = [];
+    }
+
+    function waitRecorderStop() {
+      return new Promise((resolve) => {
+        if (!mediaRecorder || mediaRecorder.state === "inactive") {
+          resolve();
+          return;
+        }
+        const rec = mediaRecorder;
+        const done = () => resolve();
+        rec.addEventListener("stop", done, { once: true });
+        try {
+          rec.stop();
+        } catch (_) {
+          resolve();
+        }
+      });
+    }
+
+    async function saveRecordingBlob() {
+      if (saveBusy) return;
+      if (!recordedChunks.length) {
+        statusEl.textContent = "нет записи";
+        return;
+      }
+      saveBusy = true;
+      statusEl.textContent = "сохраняю…";
+      const type = recMime || recordedChunks[0].type || "video/mp4";
+      const blob = new Blob(recordedChunks, { type });
+      const ext = type.includes("webm") ? "webm" : "mp4";
+      const name = `suflyor-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.${ext}`;
+      const file = new File([blob], name, { type });
+      recordedChunks = [];
+      try {
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: "Запись суфлёра" });
+          statusEl.textContent = "сохранено";
+        } else {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = name;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 2000);
+          statusEl.textContent = "файл скачан";
+        }
+      } catch (err) {
+        if (err && err.name === "AbortError") {
+          statusEl.textContent = "отменено";
+        } else {
+          // fallback download if share failed
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = name;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 2000);
+          statusEl.textContent = "файл скачан";
+        }
+      } finally {
+        saveBusy = false;
+      }
+    }
+
+    async function stopAndSave() {
+      if (!recording && !mediaRecorder) {
+        await leavePlayer(false);
+        return;
+      }
+      setPlaying(false);
+      stopVoiceHard();
+      statusEl.textContent = "стоп…";
+      await waitRecorderStop();
+      recording = false;
+      document.body.classList.remove("recording");
+      if (recTimer) {
+        clearInterval(recTimer);
+        recTimer = 0;
+      }
+      mediaRecorder = null;
+      await saveRecordingBlob();
+      stopCamera();
+      releaseWakeLock();
+      document.body.classList.remove("playing", "counting");
     }
 
     async function requestWakeLock() {
@@ -577,7 +796,7 @@
       playing = on;
       playBtn.textContent = on ? "Пауза" : "Пуск";
       if (on) {
-        statusEl.textContent = voiceLive ? "голос" : "лента";
+        if (!recording) statusEl.textContent = voiceLive ? "голос" : "лента";
         lastTs = 0;
         raf = requestAnimationFrame(tick);
         if (voiceLive && synth) {
@@ -585,7 +804,7 @@
           speakFrom(chunkIndex);
         }
       } else {
-        statusEl.textContent = "пауза";
+        if (!recording) statusEl.textContent = "пауза";
         if (raf) {
           cancelAnimationFrame(raf);
           raf = 0;
@@ -617,10 +836,10 @@
       if (voiceLive && playing) {
         stopVoiceHard();
         speakFrom(chunkIndex);
-        statusEl.textContent = "голос";
+        if (!recording) statusEl.textContent = "голос";
       } else {
         stopVoiceHard();
-        statusEl.textContent = playing ? "лента" : "пауза";
+        if (!recording) statusEl.textContent = playing ? "лента" : "пауза";
       }
     }
 
@@ -632,6 +851,10 @@
         setupErr.textContent = "Вставь текст.";
         return;
       }
+      if (recOnEl.checked && !camOnEl.checked) {
+        setupErr.textContent = "Для записи включи камеру.";
+        return;
+      }
       saveState();
       voiceLive = voiceOnEl.checked;
       followVoice = followVoiceEl.checked;
@@ -639,7 +862,7 @@
       try {
         await startCamera();
       } catch (err) {
-        setupErr.textContent = (err && err.message) || "Нет доступа к камере. Разреши в настройках Safari.";
+        setupErr.textContent = (err && err.message) || "Нет доступа к камере/микрофону. Разреши в Safari.";
         if (camOnEl.checked) return;
       }
       renderChunks(text);
@@ -651,7 +874,10 @@
       chunkIndex = 0;
       await requestWakeLock();
 
-      const go = () => setPlaying(true);
+      const go = () => {
+        if (recOnEl.checked && stream) startRecorder();
+        setPlaying(true);
+      };
       if (countdownOn.checked) {
         document.body.classList.add("counting");
         let n = 3;
@@ -671,16 +897,30 @@
       }
     }
 
-    function leavePlayer() {
+    async function leavePlayer(saveIfRec = true) {
       setPlaying(false);
       stopVoiceHard();
+      if (saveIfRec && (recording || (mediaRecorder && mediaRecorder.state !== "inactive"))) {
+        await waitRecorderStop();
+        recording = false;
+        document.body.classList.remove("recording");
+        mediaRecorder = null;
+        if (recTimer) {
+          clearInterval(recTimer);
+          recTimer = 0;
+        }
+        await saveRecordingBlob();
+      } else {
+        hardStopRecorder(false);
+      }
       stopCamera();
       releaseWakeLock();
       document.body.classList.remove("playing", "counting");
     }
 
     $("startBtn").addEventListener("click", enterPlayer);
-    $("backBtn").addEventListener("click", leavePlayer);
+    $("backBtn").addEventListener("click", () => leavePlayer(true));
+    stopBtn.addEventListener("click", stopAndSave);
     playBtn.addEventListener("click", () => setPlaying(!playing));
     voiceToggleBtn.addEventListener("click", toggleVoiceLive);
 
@@ -690,12 +930,14 @@
         saveState();
       });
     });
-    [camOnEl, voiceOnEl, countdownOn, followVoiceEl].forEach((el) => {
+    [camOnEl, recOnEl, micOnEl, voiceOnEl, countdownOn, followVoiceEl].forEach((el) => {
       el.addEventListener("change", () => {
         if (el === voiceOnEl) {
           voiceLive = voiceOnEl.checked;
           syncVoiceBtn();
         }
+        if (el === camOnEl && !camOnEl.checked) recOnEl.checked = false;
+        if (el === recOnEl && recOnEl.checked) camOnEl.checked = true;
         saveState();
       });
     });
@@ -710,7 +952,7 @@
       e.target.value = "";
     });
 
-    // tap on stage (not HUD) toggles play
+    // tap on stage (not HUD) toggles scroll/TTS only — запись не трогаем
     $("stage").addEventListener("click", (e) => {
       if (e.target.closest("#hud") || e.target.closest("button")) return;
       if (!document.body.classList.contains("playing")) return;
