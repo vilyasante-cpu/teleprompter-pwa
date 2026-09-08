@@ -1,0 +1,26 @@
+{
+  "name": "Телесуфлёр",
+  "short_name": "Суфлёр",
+  "description": "Текст поверх камеры и голос в наушники. Работает офлайн.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0b0c",
+  "theme_color": "#0b0b0c",
+  "lang": "ru",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

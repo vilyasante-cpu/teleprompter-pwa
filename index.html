@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+  <meta name="theme-color" content="#0b0b0c" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Суфлёр" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
+  <title>Телесуфлёр</title>
+  <style>
+    :root {
+      --bg: #0b0b0c;
+      --fg: #f2f2f0;
+      --muted: #9a9a94;
+      --panel: #161618;
+      --border: #2a2a2e;
+      --accent: #e8c547;
+      --danger: #e85d5d;
+      --safe-b: env(safe-area-inset-bottom, 0px);
+      --safe-t: env(safe-area-inset-top, 0px);
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+    html, body {
+      margin: 0;
+      height: 100%;
+      height: 100dvh;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: -apple-system, system-ui, "Segoe UI", sans-serif;
+      overflow: hidden;
+    }
+
+    button, .file-btn, select {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--fg);
+      padding: 12px 14px;
+      border-radius: 10px;
+      font-size: 0.95rem;
+      cursor: pointer;
+    }
+
+    button.primary {
+      background: var(--accent);
+      color: #111;
+      border-color: var(--accent);
+      font-weight: 700;
+    }
+
+    button:disabled { opacity: 0.45; }
+
+    #setup {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      padding: calc(14px + var(--safe-t)) 14px calc(14px + var(--safe-b));
+      gap: 10px;
+      overflow: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    body.playing #setup { display: none; }
+    body.playing #stage { display: block; }
+
+    #setup h1 {
+      margin: 0;
+      font-size: 1.2rem;
+      font-weight: 700;
+    }
+
+    .hint {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.86rem;
+      line-height: 1.4;
+    }
+
+    #script {
+      flex: 1;
+      min-height: 180px;
+      width: 100%;
+      resize: vertical;
+      background: var(--panel);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      font-size: 1.05rem;
+      line-height: 1.5;
+      outline: none;
+    }
+
+    #script:focus { border-color: var(--accent); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .grid label, .full label {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 0.8rem;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+    }
+
+    .full { display: flex; flex-direction: column; gap: 8px; }
+
+    .check {
+      flex-direction: row !important;
+      align-items: center;
+      gap: 10px !important;
+    }
+
+    input[type="range"] { width: 100%; accent-color: var(--accent); }
+    input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); }
+
+    select {
+      width: 100%;
+      padding: 8px 10px;
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1.4fr;
+      gap: 8px;
+    }
+
+    #fileInput { display: none; }
+
+    .install-tip {
+      display: none;
+      padding: 10px 12px;
+      border: 1px dashed var(--border);
+      border-radius: 10px;
+      color: var(--muted);
+      font-size: 0.82rem;
+      line-height: 1.4;
+    }
+
+    .install-tip.show { display: block; }
+
+    /* --- stage --- */
+    #stage {
+      display: none;
+      position: relative;
+      width: 100%;
+      height: 100%;
+      background: #000;
+    }
+
+    #cam {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background: #111;
+      transform: scaleX(-1);
+    }
+
+    body.no-cam #cam { display: none; }
+    body.no-mirror #cam { transform: none; }
+
+    .shade {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, var(--shade, 0.28));
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    .prompt {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 0;
+      bottom: 72px;
+      bottom: calc(72px + var(--safe-b));
+      z-index: 2;
+      overflow: hidden;
+      mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 78%, transparent 100%);
+      -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 78%, transparent 100%);
+      pointer-events: none;
+    }
+
+    .cue {
+      position: absolute;
+      left: 8%;
+      right: 8%;
+      top: 38%;
+      height: 0;
+      border-top: 2px solid rgba(232, 197, 71, 0.85);
+      z-index: 3;
+      pointer-events: none;
+    }
+
+    .scroll-inner {
+      padding: 40vh 5vw 55vh;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.35;
+      font-weight: 600;
+      text-align: center;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.85), 0 0 12px rgba(0,0,0,0.55);
+      will-change: transform;
+    }
+
+    .scroll-inner .chunk.speaking {
+      color: var(--accent);
+    }
+
+    #hud {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 5;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+      padding: 10px 10px calc(10px + var(--safe-b));
+      background: linear-gradient(to top, rgba(0,0,0,0.92), rgba(0,0,0,0.55));
+    }
+
+    #hud button {
+      padding: 10px 12px;
+      font-size: 0.88rem;
+      min-height: 42px;
+    }
+
+    #status {
+      color: var(--muted);
+      font-size: 0.78rem;
+      margin-left: auto;
+    }
+
+    #countdown {
+      display: none;
+      position: absolute;
+      inset: 0;
+      z-index: 8;
+      background: rgba(0,0,0,0.55);
+      align-items: center;
+      justify-content: center;
+      font-size: 5rem;
+      font-weight: 800;
+      color: var(--accent);
+    }
+
+    body.counting #countdown { display: flex; }
+
+    .err {
+      color: var(--danger);
+      font-size: 0.84rem;
+      margin: 0;
+      min-height: 1.2em;
+    }
+  </style>
+</head>
+<body>
+  <div id="setup">
+    <h1>Телесуфлёр</h1>
+    <p class="hint">
+      На iPhone: Safari → Поделиться → «На экран Домой». Камера спереди, текст поверх.
+      Голос — в AirPods / наушники (вывод звука системы).
+    </p>
+    <p class="install-tip" id="installTip">
+      Чтобы поставить как приложение: Safari → кнопка «Поделиться» → «На экран „Домой“».
+    </p>
+    <textarea id="script" placeholder="Вставь текст для чтения…"></textarea>
+    <div class="grid">
+      <label class="check"><input id="camOn" type="checkbox" checked /> Камера</label>
+      <label class="check"><input id="voiceOn" type="checkbox" /> Голос в ухо</label>
+      <label class="check"><input id="countdownOn" type="checkbox" checked /> Отсчёт 3 сек</label>
+      <label class="check"><input id="followVoice" type="checkbox" checked /> Лента за голосом</label>
+    </div>
+    <div class="grid">
+      <label>Скорость ленты <span id="speedVal">36</span>
+        <input id="speed" type="range" min="8" max="100" value="36" />
+      </label>
+      <label>Шрифт <span id="fontVal">28</span>
+        <input id="font" type="range" min="18" max="56" value="28" />
+      </label>
+      <label>Темп речи <span id="voiceRateVal">1.0</span>
+        <input id="voiceRate" type="range" min="60" max="140" value="100" />
+      </label>
+      <label>Затемнение <span id="shadeVal">28%</span>
+        <input id="shade" type="range" min="0" max="70" value="28" />
+      </label>
+    </div>
+    <div class="full">
+      <label>Голос
+        <select id="voiceSelect" aria-label="Голос"></select>
+      </label>
+    </div>
+    <p class="err" id="setupErr"></p>
+    <div class="actions">
+      <label class="file-btn" for="fileInput" style="text-align:center">Файл .txt</label>
+      <input id="fileInput" type="file" accept=".txt,.md,.text,text/plain" />
+      <button type="button" class="primary" id="startBtn">Старт</button>
+    </div>
+  </div>
+
+  <div id="stage">
+    <video id="cam" playsinline muted autoplay></video>
+    <div class="shade" id="shadeLayer"></div>
+    <div class="cue" aria-hidden="true"></div>
+    <div class="prompt">
+      <div class="scroll-inner" id="scrollText"></div>
+    </div>
+    <div id="countdown">3</div>
+    <div id="hud">
+      <button type="button" id="playBtn">Пауза</button>
+      <button type="button" id="voiceToggleBtn">Голос</button>
+      <button type="button" id="backBtn">Назад</button>
+      <span id="status">идёт</span>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const scriptEl = $("script");
+    const scrollText = $("scrollText");
+    const camEl = $("cam");
+    const speedEl = $("speed");
+    const fontEl = $("font");
+    const voiceRateEl = $("voiceRate");
+    const shadeEl = $("shade");
+    const camOnEl = $("camOn");
+    const voiceOnEl = $("voiceOn");
+    const countdownOn = $("countdownOn");
+    const followVoiceEl = $("followVoice");
+    const voiceSelect = $("voiceSelect");
+    const setupErr = $("setupErr");
+    const statusEl = $("status");
+    const playBtn = $("playBtn");
+    const voiceToggleBtn = $("voiceToggleBtn");
+    const countdownEl = $("countdown");
+    const installTip = $("installTip");
+
+    const STORAGE_KEY = "teleprompter-pwa-v1";
+    const synth = window.speechSynthesis || null;
+
+    let stream = null;
+    let sideOffset = 0;
+    let playing = false;
+    let raf = 0;
+    let lastTs = 0;
+    let voiceLive = false;
+    let followVoice = true;
+    let chunks = [];
+    let chunkIndex = 0;
+    let utteranceGen = 0;
+    let wakeLock = null;
+
+    function rateFromSlider() {
+      return Number(voiceRateEl.value) / 100;
+    }
+
+    function syncLabels() {
+      $("speedVal").textContent = speedEl.value;
+      $("fontVal").textContent = fontEl.value;
+      $("voiceRateVal").textContent = rateFromSlider().toFixed(1);
+      $("shadeVal").textContent = shadeEl.value + "%";
+      scrollText.style.fontSize = fontEl.value + "px";
+      document.documentElement.style.setProperty("--shade", String(Number(shadeEl.value) / 100));
+    }
+
+    function syncVoiceBtn() {
+      voiceToggleBtn.textContent = voiceLive ? "Голос вкл" : "Голос выкл";
+    }
+
+    function loadState() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return;
+        const s = JSON.parse(raw);
+        if (s.text) scriptEl.value = s.text;
+        if (s.speed) speedEl.value = s.speed;
+        if (s.font) fontEl.value = s.font;
+        if (s.voiceRate) voiceRateEl.value = s.voiceRate;
+        if (typeof s.shade === "number") shadeEl.value = s.shade;
+        if (typeof s.camOn === "boolean") camOnEl.checked = s.camOn;
+        if (typeof s.voiceOn === "boolean") voiceOnEl.checked = s.voiceOn;
+        if (typeof s.countdown === "boolean") countdownOn.checked = s.countdown;
+        if (typeof s.followVoice === "boolean") followVoiceEl.checked = s.followVoice;
+        if (s.voiceURI) voiceSelect.dataset.prefer = s.voiceURI;
+      } catch (_) {}
+      syncLabels();
+      voiceLive = voiceOnEl.checked;
+      syncVoiceBtn();
+    }
+
+    function saveState() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        text: scriptEl.value,
+        speed: Number(speedEl.value),
+        font: Number(fontEl.value),
+        voiceRate: Number(voiceRateEl.value),
+        shade: Number(shadeEl.value),
+        camOn: camOnEl.checked,
+        voiceOn: voiceOnEl.checked,
+        countdown: countdownOn.checked,
+        followVoice: followVoiceEl.checked,
+        voiceURI: voiceSelect.value || "",
+      }));
+    }
+
+    function splitChunks(text) {
+      const parts = text
+        .replace(/\r\n/g, "\n")
+        .split(/(?<=[.!?…])\s+|\n+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      return parts.length ? parts : [text.trim()];
+    }
+
+    function renderChunks(text) {
+      chunks = splitChunks(text);
+      chunkIndex = 0;
+      scrollText.replaceChildren();
+      chunks.forEach((part, i) => {
+        const span = document.createElement("span");
+        span.className = "chunk";
+        span.dataset.i = String(i);
+        span.textContent = part + (i < chunks.length - 1 ? " " : "");
+        scrollText.appendChild(span);
+      });
+    }
+
+    function highlightChunk(i) {
+      scrollText.querySelectorAll(".chunk.speaking").forEach((el) => el.classList.remove("speaking"));
+      const el = scrollText.querySelector(`.chunk[data-i="${i}"]`);
+      if (el) el.classList.add("speaking");
+      return el;
+    }
+
+    function scrollChunkIntoCue(el) {
+      if (!el || !followVoice || !voiceLive) return;
+      const wrap = scrollText.parentElement;
+      const wrapRect = wrap.getBoundingClientRect();
+      const cueY = wrapRect.top + wrapRect.height * 0.38;
+      const rect = el.getBoundingClientRect();
+      sideOffset += rect.top - cueY;
+      scrollText.style.transform = `translateY(${-sideOffset}px)`;
+    }
+
+    function fillVoices() {
+      if (!synth) {
+        voiceSelect.innerHTML = "<option value=\"\">Нет синтеза речи</option>";
+        return;
+      }
+      const voices = synth.getVoices();
+      const prefer = voiceSelect.dataset.prefer || voiceSelect.value || "";
+      const ru = voices.filter((v) => /^ru/i.test(v.lang));
+      const list = ru.length ? ru : voices;
+      voiceSelect.innerHTML = "";
+      if (!list.length) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "Голоса загружаются…";
+        voiceSelect.appendChild(opt);
+        return;
+      }
+      list.forEach((v) => {
+        const opt = document.createElement("option");
+        opt.value = v.voiceURI;
+        opt.textContent = `${v.name} (${v.lang})`;
+        voiceSelect.appendChild(opt);
+      });
+      if (prefer && [...voiceSelect.options].some((o) => o.value === prefer)) {
+        voiceSelect.value = prefer;
+      } else {
+        const apple = list.find((v) => /milena|yuri|katya|russian/i.test(v.name));
+        const anyRu = list.find((v) => /^ru/i.test(v.lang));
+        voiceSelect.value = (apple || anyRu || list[0]).voiceURI;
+      }
+      delete voiceSelect.dataset.prefer;
+    }
+
+    function pickVoice() {
+      if (!synth || !voiceSelect.value) return null;
+      return synth.getVoices().find((v) => v.voiceURI === voiceSelect.value) || null;
+    }
+
+    function stopVoiceHard() {
+      utteranceGen += 1;
+      if (synth) synth.cancel();
+      scrollText.querySelectorAll(".chunk.speaking").forEach((el) => el.classList.remove("speaking"));
+    }
+
+    function speakFrom(index) {
+      if (!synth || !voiceLive || !playing) return;
+      if (index >= chunks.length) {
+        statusEl.textContent = "конец";
+        setPlaying(false);
+        return;
+      }
+      chunkIndex = index;
+      const gen = utteranceGen;
+      const el = highlightChunk(index);
+      scrollChunkIntoCue(el);
+      const u = new SpeechSynthesisUtterance(chunks[index]);
+      u.lang = "ru-RU";
+      u.rate = rateFromSlider();
+      const voice = pickVoice();
+      if (voice) {
+        u.voice = voice;
+        u.lang = voice.lang || "ru-RU";
+      }
+      u.onend = () => {
+        if (gen !== utteranceGen) return;
+        speakFrom(index + 1);
+      };
+      synth.speak(u);
+    }
+
+    async function startCamera() {
+      stopCamera();
+      if (!camOnEl.checked) {
+        document.body.classList.add("no-cam");
+        return;
+      }
+      document.body.classList.remove("no-cam");
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("Камера недоступна в этом браузере. Открой в Safari.");
+      }
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: { ideal: "user" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+      });
+      camEl.srcObject = stream;
+      await camEl.play().catch(() => {});
+    }
+
+    function stopCamera() {
+      if (stream) {
+        stream.getTracks().forEach((t) => t.stop());
+        stream = null;
+      }
+      camEl.srcObject = null;
+    }
+
+    async function requestWakeLock() {
+      try {
+        if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request("screen");
+      } catch (_) {}
+    }
+
+    function releaseWakeLock() {
+      if (wakeLock) {
+        wakeLock.release().catch(() => {});
+        wakeLock = null;
+      }
+    }
+
+    function setPlaying(on) {
+      playing = on;
+      playBtn.textContent = on ? "Пауза" : "Пуск";
+      if (on) {
+        statusEl.textContent = voiceLive ? "голос" : "лента";
+        lastTs = 0;
+        raf = requestAnimationFrame(tick);
+        if (voiceLive && synth) {
+          stopVoiceHard();
+          speakFrom(chunkIndex);
+        }
+      } else {
+        statusEl.textContent = "пауза";
+        if (raf) {
+          cancelAnimationFrame(raf);
+          raf = 0;
+        }
+        if (synth) synth.cancel();
+        utteranceGen += 1;
+      }
+    }
+
+    function tick(ts) {
+      if (!playing) return;
+      if (!lastTs) lastTs = ts;
+      const dt = (ts - lastTs) / 1000;
+      lastTs = ts;
+      const voiceDrives = voiceLive && followVoice;
+      if (!voiceDrives) {
+        sideOffset += Number(speedEl.value) * dt;
+        scrollText.style.transform = `translateY(${-sideOffset}px)`;
+      }
+      raf = requestAnimationFrame(tick);
+    }
+
+    function toggleVoiceLive() {
+      voiceLive = !voiceLive;
+      voiceOnEl.checked = voiceLive;
+      syncVoiceBtn();
+      saveState();
+      if (!document.body.classList.contains("playing")) return;
+      if (voiceLive && playing) {
+        stopVoiceHard();
+        speakFrom(chunkIndex);
+        statusEl.textContent = "голос";
+      } else {
+        stopVoiceHard();
+        statusEl.textContent = playing ? "лента" : "пауза";
+      }
+    }
+
+    async function enterPlayer() {
+      const text = scriptEl.value.trim();
+      setupErr.textContent = "";
+      if (!text) {
+        scriptEl.focus();
+        setupErr.textContent = "Вставь текст.";
+        return;
+      }
+      saveState();
+      voiceLive = voiceOnEl.checked;
+      followVoice = followVoiceEl.checked;
+      syncVoiceBtn();
+      try {
+        await startCamera();
+      } catch (err) {
+        setupErr.textContent = (err && err.message) || "Нет доступа к камере. Разреши в настройках Safari.";
+        if (camOnEl.checked) return;
+      }
+      renderChunks(text);
+      syncLabels();
+      sideOffset = 0;
+      scrollText.style.transform = "translateY(0)";
+      document.body.classList.add("playing");
+      stopVoiceHard();
+      chunkIndex = 0;
+      await requestWakeLock();
+
+      const go = () => setPlaying(true);
+      if (countdownOn.checked) {
+        document.body.classList.add("counting");
+        let n = 3;
+        countdownEl.textContent = String(n);
+        const iv = setInterval(() => {
+          n -= 1;
+          if (n <= 0) {
+            clearInterval(iv);
+            document.body.classList.remove("counting");
+            go();
+          } else {
+            countdownEl.textContent = String(n);
+          }
+        }, 1000);
+      } else {
+        go();
+      }
+    }
+
+    function leavePlayer() {
+      setPlaying(false);
+      stopVoiceHard();
+      stopCamera();
+      releaseWakeLock();
+      document.body.classList.remove("playing", "counting");
+    }
+
+    $("startBtn").addEventListener("click", enterPlayer);
+    $("backBtn").addEventListener("click", leavePlayer);
+    playBtn.addEventListener("click", () => setPlaying(!playing));
+    voiceToggleBtn.addEventListener("click", toggleVoiceLive);
+
+    [speedEl, fontEl, voiceRateEl, shadeEl].forEach((el) => {
+      el.addEventListener("input", () => {
+        syncLabels();
+        saveState();
+      });
+    });
+    [camOnEl, voiceOnEl, countdownOn, followVoiceEl].forEach((el) => {
+      el.addEventListener("change", () => {
+        if (el === voiceOnEl) {
+          voiceLive = voiceOnEl.checked;
+          syncVoiceBtn();
+        }
+        saveState();
+      });
+    });
+    voiceSelect.addEventListener("change", saveState);
+    scriptEl.addEventListener("input", saveState);
+
+    $("fileInput").addEventListener("change", async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      scriptEl.value = await file.text();
+      saveState();
+      e.target.value = "";
+    });
+
+    // tap on stage (not HUD) toggles play
+    $("stage").addEventListener("click", (e) => {
+      if (e.target.closest("#hud") || e.target.closest("button")) return;
+      if (!document.body.classList.contains("playing")) return;
+      if (document.body.classList.contains("counting")) return;
+      setPlaying(!playing);
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        if (playing) setPlaying(false);
+      } else if (document.body.classList.contains("playing")) {
+        requestWakeLock();
+      }
+    });
+
+    if (synth) {
+      fillVoices();
+      synth.onvoiceschanged = fillVoices;
+    } else {
+      fillVoices();
+      voiceOnEl.disabled = true;
+    }
+
+    // iOS install hint
+    const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    const isStandalone = window.matchMedia("(display-mode: standalone)").matches
+      || window.navigator.standalone === true;
+    if (isIos && !isStandalone) installTip.classList.add("show");
+
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("./sw.js").catch(() => {});
+    }
+
+    loadState();
+    fillVoices();
+  </script>
+</body>
+</html>
